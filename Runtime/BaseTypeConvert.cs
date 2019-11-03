@@ -1,7 +1,15 @@
 using System;
+using System.Collections.Generic;
 
 namespace CsvHandle
 {
+    public class DictionaryConvert : ICustomConvert
+    {
+        public object Parse(Type infoPropertyType, string csvStr)
+        {
+            return default;
+        }
+    }
     /// <inheritdoc />
     [CustomConvert(true,
         typeof(int),typeof(uint),

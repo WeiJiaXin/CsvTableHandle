@@ -14,5 +14,5 @@ namespace CsvHandle
         /// <param name="csvStr"></param>
         /// <returns></returns>
         object Parse(Type infoPropertyType, string csvStr);
-    }
-}
+     }
+ }

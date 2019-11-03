@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
+using UnityEngine;
 
 
 namespace CsvHandle {
@@ -35,6 +36,8 @@ namespace CsvHandle {
         //反射信息的缓存字典
         private static Dictionary<Type, Refect> m_cacheRefects;
         private static Dictionary<Type, ICustomConvert> m_customConvert;
+
+        private static char noteChar='#';
 
         //如果读取过文件,这里存放最后一次的文件开始注解
         private static List<string> m_lastFileTitleNote;
@@ -89,7 +92,9 @@ namespace CsvHandle {
         /// <param name="encoding">编码方式,中文可能是gb2312</param>
         /// <param name="note">文件开始注解,注解的开头是什么字符(比如把第一行作为中文注解,第二行才是属性名,则第一行是#notes)</param>
         /// <returns>读取的对象集合</returns>
-        public static List<T> ReadFile<T>(string fullName, Encoding encoding, char note = '#') where T : new() {
+        public static List<T> ReadFile<T>(string fullName, Encoding encoding, char note = '#') where T : new()
+        {
+            noteChar = note;
             var typeT = typeof(T);
             //如果没有就反射并缓存反射信息 
             if (!m_cacheRefects.ContainsKey(typeT))
@@ -98,6 +103,7 @@ namespace CsvHandle {
             var lines = new List<string>(File.ReadLines(fullName, encoding));
             m_lastFileTitleNote = new List<string>();
             while (true)
+            {
                 if (lines[0][0] == note || (lines[0][0] == '"' && lines[0][1] == note))
                 {
                     m_lastFileTitleNote.Add(lines[0]);
@@ -107,11 +113,12 @@ namespace CsvHandle {
                 {
                     break;
                 }
+            }
 
             //
             var names = ReadTitle(lines[0]);
             lines.RemoveAt(0);
-            var values = ReadValue(lines);
+            var values = ReadValue(lines,names);
             //
             return Serialize<T>(names, values);
         }
@@ -149,31 +156,64 @@ namespace CsvHandle {
         }
 
         //读取数据部分,此时不解析
-        private static List<List<string>> ReadValue(List<string> lines) {
+        private static List<List<string>> ReadValue( List<string> lines,List<string> names = null) {
             var resList = new List<List<string>>();
-            foreach (var line in lines) {
+            foreach (var line in lines)
+            {
+                if (line.StartsWith($"{noteChar}") || line.StartsWith($"\"{noteChar}"))
+                    continue;
                 var valueList = new List<string>();
                 var datas     = line.Split(',');
                 var queue     = new Queue<string>();
                 foreach (var data in datas)
-                    if (queue.Count <= 0) {
-                        if (data.StartsWith("\"")) {
-                            if (Regex.Matches(data,"\"").Count%2==0)
-                                valueList.Add(DelESC(data.Substring(1, data.Length - 2),'\"'));
+                {
+                    if (queue.Count <= 0)
+                    {
+                        if (data.StartsWith("\""))
+                        {
+                            if (Regex.Matches(data, "\"").Count % 2 == 0)
+                                valueList.Add(DelESC(data.Substring(1, data.Length - 2), '\"'));
                             else
                                 queue.Enqueue(data);
-                        } else {
+                        }
+                        else
+                        {
                             valueList.Add(data);
                         }
-                    } else {
-                        if (Regex.Matches(data,"\"").Count%2==1) {
+                    }
+                    else
+                    {
+                        if (Regex.Matches(data, "\"").Count % 2 == 1)
+                        {
                             queue.Enqueue(data);
-                            valueList.Add(DelESC(GetStringByQueue(queue,','),'\"'));
+                            valueList.Add(DelESC(GetStringByQueue(queue, ','), '\"'));
                             queue.Clear();
-                        } else {
+                        }
+                        else
+                        {
                             queue.Enqueue(data);
                         }
                     }
+                }
+
+                if (names != null && names.Count != valueList.Count)
+                {
+                    string str = "读取到行:" + line + "\n\n";
+                    str += "并解析为:";
+                    for (int i = 0; i < valueList.Count; i++)
+                    {
+                        str += $"<{valueList[i]}>";
+                    }
+
+                    str += "\n\n";
+                    str += "却与表头字段数量不一致\ntitle:";
+                    for (int i = 0; i < names.Count; i++)
+                    {
+                        str += $"<{names[i]}>";
+                    }
+
+                    Debug.LogError(str);
+                }
 
                 resList.Add(valueList);
             }
@@ -196,6 +236,11 @@ namespace CsvHandle {
                     info = refect.Property.Find(p => p.Name == names[i]);
                 else
                     info = proName.m_property;
+                if (info == null)
+                {
+                    if (!string.IsNullOrEmpty(names[i]))
+                        Debug.LogError($"未找到表头中{names[i]}对应的属性,请确认是否标记为属性!");
+                }
                 pros.Add(info);
             }
 
@@ -240,38 +285,49 @@ namespace CsvHandle {
         /// <param name="val">字段的值</param>
         private static void SetValue(PropertyInfo info, object obj, string val)
         {
-            if (info.PropertyType.IsArray)
-            {
-                //处理数组
-                var vals = SpiltArray(val);
-                var eleType = info.PropertyType.GetElementType();
-                if(eleType==null)
-                    return;
-                var array = Array.CreateInstance(eleType, vals.Count);
-                for (int i = 0; i < vals.Count; i++)
-                {
-                    if (m_customConvert.ContainsKey(eleType))
-                    {
-                        var v = m_customConvert[eleType].Parse(eleType, vals[i].Trim());
-                        array.SetValue(v, i);
-                    }
-                }
-
-                info.SetValue(obj, array);
+            if (info == null)
                 return;
-            }
             if (m_customConvert.ContainsKey(info.PropertyType))
             {
                 //处理普通类型
                 var v = m_customConvert[info.PropertyType].Parse(info.PropertyType, DelESC(val, '\\').Trim());
                 info.SetValue(obj, v);
             }
+            else
+            {
+                if (info.PropertyType.IsArray)
+                {
+                    //处理数组
+                    var vals = SpiltArray(val);
+                    var eleType = info.PropertyType.GetElementType();
+                    if (eleType == null)
+                        return;
+                    var array = Array.CreateInstance(eleType, vals.Count);
+                    for (int i = 0; i < vals.Count; i++)
+                    {
+                        if (m_customConvert.ContainsKey(eleType))
+                        {
+                            var v = m_customConvert[eleType].Parse(eleType, vals[i].Trim());
+                            array.SetValue(v, i);
+                        }
+                        else
+                        {
+                            Debug.LogError($"数组类型<{eleType}>未找到转换器!请按照文档实现此类型");
+                        }
+                    }
+
+                    info.SetValue(obj, array);
+                    return;
+                }
+                else
+                    Debug.LogError($"类型<{info.PropertyType}>未找到转换器!请按照文档实现此类型");
+            }
         }
 
         //裁切数组,会进行转义
         private static List<string> SpiltArray(string val)
         {
-            var strs = val.Split('|');
+            var strs = val.Split(',');
             List<string> list=new List<string>();
             Queue<string> queue=new Queue<string>();
             for (int i = 0; i < strs.Length; i++)
@@ -287,7 +343,7 @@ namespace CsvHandle {
                     else
                     {
                         queue.Enqueue(strs[i]);
-                        list.Add(DelESC(GetStringByQueue(queue, '|',false), '\\'));
+                        list.Add(DelESC(GetStringByQueue(queue, ',',false), '\\'));
                         queue.Clear();
                     }
                 }

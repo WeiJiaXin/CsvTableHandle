@@ -1,0 +1,9 @@
+{
+    "name": "com.lowy.CsvHandle",
+    "displayName": "Lowy.CsvHandle",
+    "version": "1.0.1",
+    "unity": "2018.3",
+    "description": "读表工具",
+    "keywords": ["csv", "lowy"],
+    "category": "Module"
+}
